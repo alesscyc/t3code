@@ -174,6 +174,7 @@ interface ComposerSendInput {
   readonly isServerThread: boolean;
   readonly isLocalDraftThread: boolean;
   readonly isGitRepo: boolean;
+  readonly isMultiRepoWorkspace: boolean;
   readonly phase: SessionPhase;
   readonly runtimeMode: RuntimeMode;
   readonly sendEnvMode: DraftThreadEnvMode;
@@ -269,6 +270,7 @@ export function useComposerSend(input: ComposerSendInput) {
     isServerThread,
     isLocalDraftThread,
     isGitRepo,
+    isMultiRepoWorkspace,
     phase,
     runtimeMode,
     sendEnvMode,
@@ -795,6 +797,7 @@ export function useComposerSend(input: ComposerSendInput) {
       sendEnvMode,
       worktreePath: activeThread.worktreePath,
       activeThreadBranch,
+      isMultiRepoWorkspace,
       resumeCompactionTokens,
       keepFullHistory,
       phase,

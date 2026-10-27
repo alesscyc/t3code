@@ -534,6 +534,31 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("names a multi-repo workspace's repositories in the turn's instructions", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const policy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        ...runtimePolicy,
+        repositories: [{ relativePath: "packages/api", name: "api" }],
+      });
+      const harness = yield* makeHarness(
+        fake,
+        INSTANCE_ID,
+        undefined,
+        undefined,
+        undefined,
+        policy,
+      );
+      yield* startConversation(harness, fake);
+      const turnStart = fake.calls.find((call) => call.method === "turn/start");
+      const [instructions] = (turnStart?.params.input ?? []) as ReadonlyArray<{
+        readonly text: string;
+      }>;
+      assert.include(instructions?.text, "<workspace_repositories>");
+      assert.include(instructions?.text, "- packages/api (api)");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("pins Windows turns to Muse's verbatim root and starts Muse in the plain path", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();

@@ -23,16 +23,19 @@ import {
   type ThreadPullRequestKey,
 } from "@t3tools/contracts";
 import type { ReviewGuideStackLayer } from "@t3tools/provider-core/server/textGeneration";
+import { joinWorkspaceRepositoryPath } from "@t3tools/shared/path";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 import * as ServerConfig from "../config.ts";
 import * as PullRequestReviewGuides from "../persistence/PullRequestReviewGuides.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as WorkspaceRepositories from "../workspace/WorkspaceRepositories.ts";
 import { PATCH_RENDER_PREFIX_ARGS } from "../vcs/GitVcsDriverCore.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import { pullRequestSyncKey } from "./pullRequestSyncKey.ts";
@@ -72,6 +75,8 @@ const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const fileSystem = yield* FileSystem.FileSystem;
   const config = yield* ServerConfig.ServerConfig;
+  const workspaceRepositories = yield* WorkspaceRepositories.WorkspaceRepositories;
+  const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const serviceScope = yield* Effect.scope;
   const runs = yield* Ref.make<ReadonlyMap<string, PullRequestReviewGuideRun>>(new Map());
   let runCounter = 0;
@@ -94,34 +99,42 @@ const make = Effect.gen(function* () {
     return { key, workspaceRoot: project.workspaceRoot, identity: project.repositoryIdentity };
   });
 
-  const requireOwnRepository = Effect.fn("PullRequestReviewGuideService.requireOwnRepository")(
-    function* (key: ThreadPullRequestKey, identity: RepositoryIdentity | null | undefined) {
-      const own =
-        identity == null
-          ? null
-          : pullRequestSyncKey(
-              {
-                projectId: ProjectId.make("own"),
-                number: key.number,
-                repository: sourceControlDefinitions.repositorySelector(identity) ?? "",
-              },
-              identity,
-            );
-      if (
-        identity == null ||
-        own === null ||
-        own.host !== key.host ||
-        own.repository !== key.repository
-      ) {
-        return yield* new PullRequestOperationError({
-          operation: "generateReviewGuide",
-          detail:
-            "Guides are written from this project's checkout, and this pull request is in another repository. Write it from a project that is a checkout of that repository.",
-        });
+  const isOwnRepository = (
+    key: ThreadPullRequestKey,
+    identity: RepositoryIdentity | null | undefined,
+  ): identity is RepositoryIdentity => {
+    if (identity == null) return false;
+    const own = pullRequestSyncKey(
+      {
+        projectId: ProjectId.make("own"),
+        number: key.number,
+        repository: sourceControlDefinitions.repositorySelector(identity) ?? "",
+      },
+      identity,
+    );
+    return own !== null && own.host === key.host && own.repository === key.repository;
+  };
+
+  // A multi-repo workspace folder has no remote of its own; one of its repositories may be the checkout.
+  const requireCheckout = Effect.fn("PullRequestReviewGuideService.requireCheckout")(function* (
+    key: ThreadPullRequestKey,
+    workspaceRoot: string,
+    identity: RepositoryIdentity | null | undefined,
+  ) {
+    if (isOwnRepository(key, identity)) return { workspaceRoot, locator: identity.locator };
+    for (const repository of yield* workspaceRepositories.list(workspaceRoot)) {
+      const cwd = joinWorkspaceRepositoryPath(workspaceRoot, repository.relativePath);
+      const repositoryIdentity = yield* repositoryIdentities.resolve(cwd);
+      if (isOwnRepository(key, repositoryIdentity)) {
+        return { workspaceRoot: cwd, locator: repositoryIdentity.locator };
       }
-      return identity.locator;
-    },
-  );
+    }
+    return yield* new PullRequestOperationError({
+      operation: "generateReviewGuide",
+      detail:
+        "Guides are written from this project's checkout, and this pull request is in another repository. Write it from a project that is a checkout of that repository.",
+    });
+  });
 
   const readStored = (key: ThreadPullRequestKey) =>
     guides.get(key).pipe(
@@ -440,8 +453,13 @@ const make = Effect.gen(function* () {
         detail: "Review guides are off. Turn them on in Settings → Source Control.",
       });
     }
-    const { key, workspaceRoot, identity } = yield* keyFor(input);
-    const locator = yield* requireOwnRepository(key, identity);
+    const project = yield* keyFor(input);
+    const { key } = project;
+    const { workspaceRoot, locator } = yield* requireCheckout(
+      key,
+      project.workspaceRoot,
+      project.identity,
+    );
     const runKey = keyString(key);
     yield* pullRequests.invalidate({ reference: input });
     const [detail, stored] = yield* Effect.all([pullRequests.detail(input), readStored(key)], {

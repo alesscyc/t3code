@@ -64,6 +64,10 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("keeps listing a folder's repositories, which reads any directory, behind filesystem read", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.vcsListRepositories)).toBe(AuthFilesystemReadScope);
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

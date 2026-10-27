@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Queue from "effect/Queue";
 import * as Tracer from "effect/Tracer";
@@ -16,17 +17,20 @@ import {
   type PullRequestDetail,
   type PullRequestStack,
   type PullRequestRef,
+  type RepositoryIdentity,
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PullRequestReviewGuides from "../persistence/PullRequestReviewGuides.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as WorkspaceRepositories from "../workspace/WorkspaceRepositories.ts";
 import * as PullRequestReviewGuideService from "./PullRequestReviewGuideService.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 
@@ -60,9 +64,10 @@ const git = (cwd: string, args: ReadonlyArray<string>) =>
 
 const makeRepositories = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-guide-" });
   const remote = `${root}/remote`;
-  const workspace = `${root}/workspace`;
+  const workspace = path.join(root, "workspace");
   yield* fs.makeDirectory(remote);
   yield* git(remote, ["init", "--quiet", "--initial-branch=main"]);
   yield* git(remote, ["config", "user.email", "test@example.com"]);
@@ -159,6 +164,8 @@ const makeLayer = (input: {
   readonly enabled?: boolean;
   readonly currentHead?: Ref.Ref<string>;
   readonly identity?: typeof ACME_APP;
+  /** Opens the clones' parent folder as a multi-repo workspace project instead of the clone. */
+  readonly multiRepo?: boolean;
 }) =>
   PullRequestReviewGuideService.layer.pipe(
     Layer.provide(
@@ -191,16 +198,34 @@ const makeLayer = (input: {
     Layer.provide(
       Layer.succeed(ProjectService.ProjectService, {
         getShell: () =>
-          Effect.succeedSome({
-            id: projectId,
-            workspaceRoot: input.workspace,
-            repositoryIdentity: {
-              ...(input.identity ?? ACME_APP),
-              locator: { ...ACME_APP.locator, remoteUrl: input.remote },
-            },
-          }),
+          Effect.succeedSome(
+            input.multiRepo === true
+              ? { id: projectId, workspaceRoot: input.root, repositoryIdentity: null }
+              : {
+                  id: projectId,
+                  workspaceRoot: input.workspace,
+                  repositoryIdentity: {
+                    ...(input.identity ?? ACME_APP),
+                    locator: { ...ACME_APP.locator, remoteUrl: input.remote },
+                  },
+                },
+          ),
       } as unknown as ProjectService.ProjectService["Service"]),
     ),
+    Layer.provide(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: (cwd) =>
+          Effect.succeed(
+            cwd === input.workspace
+              ? ({
+                  ...ACME_APP,
+                  locator: { ...ACME_APP.locator, remoteUrl: input.remote },
+                } as RepositoryIdentity)
+              : null,
+          ),
+      }),
+    ),
+    Layer.provide(WorkspaceRepositories.layer),
     Layer.provide(
       Layer.succeed(ProviderRegistry.ProviderRegistry, {
         getProviders: Effect.succeed([]),
@@ -512,6 +537,34 @@ it.layer(layerBase, { excludeTestServices: true })("PullRequestReviewGuideServic
         assert.deepStrictEqual(result.guide, before.guide);
         assert.isFalse(yield* Deferred.isDone(stored));
         assert.isFalse(yield* Ref.get(generated));
+      }),
+    ),
+  );
+
+  it.effect("writes the guide from the matching repository of a multi-repo workspace", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const repositories = yield* makeRepositories;
+        const generatedIn = yield* Deferred.make<string>();
+        const stored = yield* Deferred.make<void>();
+        const context = yield* Layer.build(
+          makeLayer({
+            ...repositories,
+            stored,
+            multiRepo: true,
+            generate: (input) =>
+              Deferred.succeed(generatedIn, input.cwd).pipe(Effect.as({ stops: [] })),
+          }),
+        );
+        const service = Context.get(
+          context,
+          PullRequestReviewGuideService.PullRequestReviewGuideService,
+        );
+        yield* service.generate(reference);
+        yield* Deferred.await(stored);
+        assert.notStrictEqual(yield* Deferred.await(generatedIn), repositories.root);
+        const result = yield* service.get(reference);
+        assert.strictEqual(result.guide?.headSha, repositories.headSha);
       }),
     ),
   );

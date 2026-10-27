@@ -5,6 +5,7 @@ import { describe, it } from "vite-plus/test";
 import {
   buildCodexAdditionalContext,
   CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES,
+  buildCodexRepositoriesContext,
 } from "./CodexDeveloperInstructions.ts";
 
 describe("buildCodexAdditionalContext", () => {
@@ -73,6 +74,16 @@ describe("Codex orchestration context", () => {
     NodeAssert.ok(!orchestration.includes("Prefer native"));
     // The ACP terminal fallback is ACP-only; Codex agents never need it.
     NodeAssert.ok(!orchestration.includes("acp-mcp-call"));
+  });
+});
+
+describe("buildCodexRepositoriesContext", () => {
+  it("sends only the repository list, and nothing outside a multi-repo workspace", () => {
+    const context = buildCodexRepositoriesContext([{ relativePath: "api", name: "api" }]);
+    NodeAssert.deepStrictEqual(Object.keys(context ?? {}), ["t3_code_repositories"]);
+    NodeAssert.match(context!.t3_code_repositories!.value, /^<workspace_repositories>/);
+    NodeAssert.strictEqual(buildCodexRepositoriesContext([]), undefined);
+    NodeAssert.strictEqual(buildCodexRepositoriesContext(undefined), undefined);
   });
 });
 
