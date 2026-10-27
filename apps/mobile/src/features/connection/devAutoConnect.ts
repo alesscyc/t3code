@@ -58,6 +58,8 @@ async function connect(pairingUrl: string, expectedEnvironmentId: EnvironmentId 
   }
   appAtomRegistry.set(devAutoConnectAttemptAtom, null);
   whenRootNavigationReady(() => {
+    // A link that arrived before navigation was ready owns the form now.
+    if (appAtomRegistry.get(devAutoConnectAttemptAtom) !== null) return;
     const current = rootNavigationRef.getCurrentRoute()?.name;
     if (current === undefined || !PAIRING_FORM_ROUTES.includes(current)) return;
     // Return to whatever the link opened the sheet over.
