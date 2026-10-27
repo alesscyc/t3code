@@ -40,6 +40,8 @@ import {
   SHOWCASE_THREAD_ID,
   showcaseReadinessKey,
   showcaseSceneOnScreen,
+  shouldNavigateToShowcaseScene,
+  type ShowcaseNavigationTarget,
 } from "./showcaseCaptureModel";
 import {
   buildShowcasePendingTasks,
@@ -127,7 +129,7 @@ export function installShowcaseCapture(
   let requestedScene: ShowcaseScene | null = null;
   let pendingTasks: Run | null = null;
   let agentActivity: Run | null = null;
-  let lastNavigation: string | null = null;
+  let lastNavigation: ShowcaseNavigationTarget | null = null;
   let readiness: { key: string; cancel: () => void } | null = null;
   const isCancelled = (run?: Run) => () => disposed || run?.cancelled === true;
 
@@ -308,10 +310,11 @@ export function installShowcaseCapture(
       : null;
 
     if (requestedScene !== null && hasFixture && showcaseThread && rootState) {
-      const navigation = `${requestedScene}|${scene}`;
+      const navigation = { requestedScene, scene, thread: showcaseThread };
+      // Arriving forgets the target, so leaving the scene again navigates back.
       if (scene === requestedScene) {
         lastNavigation = null;
-      } else if (navigation !== lastNavigation) {
+      } else if (shouldNavigateToShowcaseScene(lastNavigation, navigation)) {
         lastNavigation = navigation;
         rootNavigationRef.dispatch({
           ...showcaseNavigationAction(
