@@ -28,7 +28,7 @@ import { useRemoteConnections } from "../../state/use-remote-environment-registr
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { CloudEnvironmentRows } from "./CloudEnvironmentRows";
-import { devAutoConnectAttemptAtom } from "./devAutoConnect";
+import { autoConnectReport, devAutoConnectAttemptAtom } from "./devAutoConnect";
 import { splitEnvironmentSections } from "./environmentSections";
 import { leaveSettingsPage } from "../settings/settings-navigation";
 import { workspaceHasColumns } from "../workspace/workspace-selection-store";
@@ -73,18 +73,15 @@ function PairingForm({
   const [codeInput, setCodeInput] = useState(initialPairing.code);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const autoConnectAttempt = useAtomValue(devAutoConnectAttemptAtom);
-  const autoConnect =
-    autoConnectAttempt !== null &&
-    routePairingUrl.length > 0 &&
-    autoConnectAttempt.pairingUrl === routePairingUrl
-      ? autoConnectAttempt
-      : null;
-  // The dev auto-connect report applies until the user starts their own attempt.
+  // The user's own edit or submit dismisses the dev auto-connect report.
   const [ownAttempt, setOwnAttempt] = useState(false);
-  const connecting = isSubmitting || (!ownAttempt && autoConnect?.status === "connecting");
-  const pairingConnectionError =
-    submitError ?? (!ownAttempt && autoConnect?.status === "failed" ? autoConnect.error : null);
+  const autoConnect = autoConnectReport(
+    useAtomValue(devAutoConnectAttemptAtom),
+    routePairingUrl,
+    ownAttempt,
+  );
+  const connecting = isSubmitting || autoConnect.connecting;
+  const pairingConnectionError = submitError ?? autoConnect.error;
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const screenFocused = useIsFocused();
   const [scannerLocked, setScannerLocked] = useState(false);

@@ -22,7 +22,11 @@ vi.mock("../../lib/rootNavigation", () => ({
 }));
 
 import { appAtomRegistry } from "../../state/atom-registry";
-import { devAutoConnectAttemptAtom, startDevAutoConnect } from "./devAutoConnect";
+import {
+  autoConnectReport,
+  devAutoConnectAttemptAtom,
+  startDevAutoConnect,
+} from "./devAutoConnect";
 
 const PAIRING_URL = "http://192.168.1.10:3773/pair#token=abc";
 
@@ -75,4 +79,46 @@ it("only prefills without the flag, and ignores the flag in production builds", 
   vi.stubGlobal("__DEV__", false);
   startDevAutoConnect(settingsLink({ pairingUrl: PAIRING_URL, autoConnect: "1" }));
   expect(harness.pair).not.toHaveBeenCalled();
+});
+
+it("forgets a failed auto-connect once the form is opened again without the flag", async () => {
+  vi.stubGlobal("__DEV__", true);
+  const failed = Promise.withResolvers<{ ok: boolean; error: string | null }>();
+  harness.pair.mockReturnValueOnce(failed.promise);
+  startDevAutoConnect(settingsLink({ pairingUrl: PAIRING_URL, autoConnect: "1" }));
+  failed.resolve({ ok: false, error: "Pairing code expired." });
+  await failed.promise;
+  await Promise.resolve();
+  expect(appAtomRegistry.get(devAutoConnectAttemptAtom)).toMatchObject({ status: "failed" });
+
+  startDevAutoConnect(settingsLink({ pairingUrl: PAIRING_URL }));
+  expect(appAtomRegistry.get(devAutoConnectAttemptAtom)).toBeNull();
+});
+
+it("drops the result of a pairing that a later link superseded", async () => {
+  vi.stubGlobal("__DEV__", true);
+  const stale = Promise.withResolvers<{ ok: boolean; error: string | null }>();
+  harness.pair.mockReturnValueOnce(stale.promise);
+  startDevAutoConnect(settingsLink({ pairingUrl: PAIRING_URL, autoConnect: "1" }));
+  startDevAutoConnect(settingsLink({ pairingUrl: PAIRING_URL }));
+
+  stale.resolve({ ok: false, error: "Pairing code expired." });
+  await stale.promise;
+  await Promise.resolve();
+  expect(appAtomRegistry.get(devAutoConnectAttemptAtom)).toBeNull();
+});
+
+it("keeps Connect busy while the auto-connect runs, even after the user edits the form", () => {
+  const connecting = { pairingUrl: PAIRING_URL, status: "connecting" } as const;
+  expect(autoConnectReport(connecting, PAIRING_URL, true)).toEqual({
+    connecting: true,
+    error: null,
+  });
+  const failed = { pairingUrl: PAIRING_URL, status: "failed", error: "Expired." } as const;
+  expect(autoConnectReport(failed, PAIRING_URL, false)).toEqual({
+    connecting: false,
+    error: "Expired.",
+  });
+  expect(autoConnectReport(failed, PAIRING_URL, true).error).toBeNull();
+  expect(autoConnectReport(connecting, "http://other/pair#token=x", false).connecting).toBe(false);
 });

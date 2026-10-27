@@ -66,7 +66,10 @@ vi.mock("./CloudEnvironmentRows", () => ({ CloudEnvironmentRows: () => null }));
 vi.mock("./environmentSections", () => ({
   splitEnvironmentSections: () => ({ connectedCloudEnvironments: [] }),
 }));
-vi.mock("./devAutoConnect", () => ({ devAutoConnectAttemptAtom: {} }));
+vi.mock("./devAutoConnect", () => ({
+  autoConnectReport: () => ({ connecting: false, error: null }),
+  devAutoConnectAttemptAtom: {},
+}));
 vi.mock("../../state/use-remote-environment-registry", () => ({
   setPendingConnectionError: (message: string | null) => {
     harness.pendingConnectionError = message;

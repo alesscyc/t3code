@@ -18,6 +18,23 @@ export const devAutoConnectAttemptAtom = Atom.make<DevAutoConnectAttempt | null>
   Atom.withLabel("mobile:dev-auto-connect-attempt"),
 );
 
+/**
+ * What the form opened by `routePairingUrl` shows of the dev auto-connect. Editing or submitting
+ * (`dismissed`) hides a failure, but a pairing still running keeps Connect busy, so the user
+ * cannot start a second pairing beside it.
+ */
+export function autoConnectReport(
+  attempt: DevAutoConnectAttempt | null,
+  routePairingUrl: string,
+  dismissed: boolean,
+): { readonly connecting: boolean; readonly error: string | null } {
+  if (attempt === null || routePairingUrl.length === 0 || attempt.pairingUrl !== routePairingUrl) {
+    return { connecting: false, error: null };
+  }
+  if (attempt.status === "connecting") return { connecting: true, error: null };
+  return { connecting: false, error: dismissed ? null : attempt.error };
+}
+
 // The pairing form is mounted both as a root sheet and inside the settings sheet.
 const PAIRING_FORM_ROUTES = ["ConnectionsNew", "SettingsEnvironmentNew"];
 
@@ -26,8 +43,11 @@ function isAutoConnectFlag(value: unknown): boolean {
 }
 
 async function connect(pairingUrl: string, expectedEnvironmentId: EnvironmentId | undefined) {
-  appAtomRegistry.set(devAutoConnectAttemptAtom, { pairingUrl, status: "connecting" });
+  const attempt: DevAutoConnectAttempt = { pairingUrl, status: "connecting" };
+  appAtomRegistry.set(devAutoConnectAttemptAtom, attempt);
   const outcome = await pairEnvironment(pairingUrl, expectedEnvironmentId);
+  // A later link replaced or cleared this attempt; its result belongs to no open form.
+  if (appAtomRegistry.get(devAutoConnectAttemptAtom) !== attempt) return;
   if (!outcome.ok) {
     appAtomRegistry.set(devAutoConnectAttemptAtom, {
       pairingUrl,
@@ -55,13 +75,20 @@ export function startDevAutoConnect(
   state: PartialState<NavigationState> | undefined,
 ): PartialState<NavigationState> | undefined {
   if (!__DEV__) return state;
-  const params = (findLinkedRoute(state, PAIRING_FORM_ROUTES)?.params ?? {}) as {
+  const route = findLinkedRoute(state, PAIRING_FORM_ROUTES);
+  if (route === undefined) return state;
+  const params = (route.params ?? {}) as {
     readonly autoConnect?: unknown;
     readonly pairingUrl?: unknown;
     readonly routeFor?: EnvironmentId;
   };
-  if (!isAutoConnectFlag(params.autoConnect)) return state;
   const pairingUrl = typeof params.pairingUrl === "string" ? params.pairingUrl.trim() : "";
-  if (pairingUrl.length > 0) void connect(pairingUrl, params.routeFor);
+  if (isAutoConnectFlag(params.autoConnect) && pairingUrl.length > 0) {
+    void connect(pairingUrl, params.routeFor);
+  } else {
+    // Only links put a pairing URL on the form, so a form opened by any other link starts
+    // clean instead of showing an earlier auto-connect's failure for the same URL.
+    appAtomRegistry.set(devAutoConnectAttemptAtom, null);
+  }
   return state;
 }
